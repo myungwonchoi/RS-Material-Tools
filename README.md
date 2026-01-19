@@ -1,1 +1,0 @@
-Redshift-Node-Wrangler

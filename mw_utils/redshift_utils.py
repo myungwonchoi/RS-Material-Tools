@@ -43,9 +43,12 @@ PORT_RS_TRI_OUTCOLOR = "com.redshift3d.redshift4c4d.nodes.core.triplanar.outcolo
 PORT_RS_BUMP_INPUT = "com.redshift3d.redshift4c4d.nodes.core.bumpmap.input"
 PORT_RS_BUMP_OUT = "com.redshift3d.redshift4c4d.nodes.core.bumpmap.out"
 PORT_RS_BUMP_TYPE = "com.redshift3d.redshift4c4d.nodes.core.bumpmap.inputtype"
+PORT_RS_MATH_VECTOR_MULTIPLY_INPUT1 = "com.redshift3d.redshift4c4d.nodes.core.rsmathmulvector.input1"
 PORT_RS_MATH_VECTOR_MULTIPLY_INPUT2 = "com.redshift3d.redshift4c4d.nodes.core.rsmathmulvector.input2"
+PORT_RS_MATH_VECTOR_MULTIPLY_OUT = "com.redshift3d.redshift4c4d.nodes.core.rsmathmulvector.out"
 
 PORT_RS_MATH_INVERT_INPUT = "com.redshift3d.redshift4c4d.nodes.core.rsmathinv.input"
+PORT_RS_MATH_INVERT_OUTPUT = "com.redshift3d.redshift4c4d.nodes.core.rsmathinv.out"
 
 PORT_RS_UV_CONTEXT_PROJECTION_OUTCONTEXT = "com.redshift3d.redshift4c4d.nodes.core.uvcontextprojection.outcontext"
 PORT_RS_UV_CONTEXT_PROJECTION_PROJECTION = "com.redshift3d.redshift4c4d.nodes.core.uvcontextprojection.proj_type"
@@ -111,10 +114,28 @@ def remove_connections(node, port_id):
             break # 포트를 찾았으므로 루프 종료
 
 
+# --- Channel Suffixes ---
+# CHANNEL_SUFFIXES = {
+#     "diffuse_color": "BaseColor", # RS Material
+#     "base_color": "BaseColor", # Standard Material
+#     "normal": "Normal",
+#     "ao": "AO",
+#     "refl_metalness": "Metalic", # RS Material    
+#     "metalness": "Metalic", # Standard Material
+#     "refl_roughness": "Roughness",
+#     "refl_weight": "Specular",
+#     "glossiness": "Glossiness",
+#     "opacity_color": "Opacity",
+#     "translucency": "Translucency",
+#     "bump" : "Bump",
+#     "displacement" : "Displacement",
+#     "emission_color" : "Emissive"
+# }
+
 TEXTURE_CHANNELS = {
     "base_color":        [
         "basecolor", "base", "color", "albedo", "diffuse", "diff", 
-        "col", "bc", "alb", "rgb" , "d"
+        "col", "bc", "alb", "rgb" , "d", "dif"
     ],
     "normal":       [
         "normal", "norm", "nrm", "nml", "nrml", "n" 
@@ -138,72 +159,54 @@ TEXTURE_CHANNELS = {
         "glossiness", "gloss", "g"
     ],
     "opacity_color":      [
-        "opacity", "opac", "alpha", "transparency", "transparent", 
-        "o", "a", "mask", "cutout" # 알파 마스크용 용어 추가
+        "opacity", "opac", "alpha", "o", "a", "cutout" # 알파 마스크용 용어 추가
     ],
     "translucency": [
         "translucency", "transmission", "trans", 
         "sss", "subsurface", "scatter", "scattering" # SSS 관련 용어 보강
     ],
     "displacement": [
-        "displacement", "disp", "dsp", 
+        "displacement", "disp", "dsp",
         "height", "h"
     ],
     "emission_color":     [
-        "emissive", "emission", "emit", "illu", "illumination", "selfillum"
+        "emissive", "emission", "emit", "illu", "illumination", "selfillum", "e"
     ]
 }
 
 def _split_into_components(fname):
     """
-    Split filename into components with prefix filtering
-    'D_Wood_Maple_01_ROUGH_1.jpg' -> ['wood', 'maple', 'rough']
+    Split filename into components for channel detection.
+    Removes digits, replaces separators with '_', and splits by '_'.
+    Does NOT split CamelCase.
     """
     # Remove extension
     fname = os.path.splitext(fname)[0]
 
-    # [NEW] Discard prefix: Keep string only after the LAST underscore
-    if "_" in fname:
-        # 마지막 _ 뒤의 부분만 가져옴
-        fname = fname.rsplit("_", 1)[-1]
-    else:
-        # 언더바가 없으면 조건에 맞지 않으므로 빈 리스트 반환
-        return []
-
     # Remove digits
     fname = "".join(i for i in fname if not i.isdigit())
 
-    # Separate CamelCase by space
-    fname = re.sub(r"([a-z])([A-Z])", r"\g<1> \g<2>", fname)
-
-    # Replace common separators with SPACE
-    separators = ["_", ".", "-", "__", "--", "#"]
+    # Replace common separators with UNDERSCORE
+    separators = [" ", ".", "-", "__", "--", "#"]
     for sep in separators:
-        fname = fname.replace(sep, " ")
+        fname = fname.replace(sep, "_")
 
-    components = fname.split(" ")
+    components = fname.split("_")
     components = [c.lower() for c in components if c.strip()]
     return components
 
 def GetTextureChannel(fname):
     """
-    파일명의 마지막 '_' 뒤의 단어를 추출하여 채널을 판별합니다.
-    점수 계산 없이 정확히 일치하는 키워드가 있으면 해당 채널을 반환합니다.
+    Determines the texture channel by analyzing filename components.
+    Checks components in reverse order against known channel keywords.
     """
-    # 1. 확장자 제거
-    base_name = os.path.splitext(fname)[0]
+    components = _split_into_components(fname)
     
-    # 2. '_'가 없으면 판별 불가
-    if "_" not in base_name:
-        return None
-        
-    # 3. 마지막 '_' 뒤의 단어 추출 및 소문자 변환
-    suffix = base_name.rsplit("_", 1)[-1].lower()
-    
-    # 4. 채널 매칭 확인
-    for channel, keywords in TEXTURE_CHANNELS.items():
-        if suffix in keywords:
-            return channel
+    # Check in reverse order
+    for component in reversed(components):
+        for channel, keywords in TEXTURE_CHANNELS.items():
+            if component in keywords:
+                return channel
             
     return None
 

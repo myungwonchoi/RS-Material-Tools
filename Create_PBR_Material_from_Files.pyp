@@ -16,24 +16,6 @@ import redshift_utils
 # --- Plugin ID ---
 PLUGIN_ID = 1067297
 
-# --- Channel Suffixes ---
-# CHANNEL_SUFFIXES = {
-#     "diffuse_color": "BaseColor", # RS Material
-#     "base_color": "BaseColor", # Standard Material
-#     "normal": "Normal",
-#     "ao": "AO",
-#     "refl_metalness": "Metalic", # RS Material    
-#     "metalness": "Metalic", # Standard Material
-#     "refl_roughness": "Roughness",
-#     "refl_weight": "Specular",
-#     "glossiness": "Glossiness",
-#     "opacity_color": "Opacity",
-#     "translucency": "Translucency",
-#     "bump" : "Bump",
-#     "displacement" : "Displacement",
-#     "emission_color" : "Emissive"
-# }
-
 def ask_open_filenames(title="Select Files"):
     """
     Opens a native Windows file dialog for multi-file selection using ctypes.
@@ -119,6 +101,7 @@ def ask_open_filenames(title="Select Files"):
 
 class CreatePBRMaterialCommand(c4d.plugins.CommandData):
     def Execute(self, doc):
+        c4d.CallCommand(465002211) # Node Editor
         # 0. Load Textures (Windows API Multi-Select)
         texture_files = ask_open_filenames(title="Load Texture Files...")
 
@@ -174,199 +157,278 @@ class CreatePBRMaterialCommand(c4d.plugins.CommandData):
                 except Exception as e:
                     print(f"Directory scan error: {e}")
 
-        # 5. Process Textures
-        created_nodes = []
+        # 5. Process Textures - New Logic: Scan First, Then Connect
         
-        # 같은 채널에 여러 번 연결하지 않기 위한 플래그
-        connected_flags = {
-            "base_color": False,
-            "metalness": False,
-            "refl_roughness": False,
-            "refl_weight": False,
-            "opacity_color": False,
-            "emission_color": False,
-            "bump_input": "", # For both bump and normal
-            "displacement": False
+        # Data structure to hold detected MAPS: key=channel, value=list of (node, filename)
+        detected_maps = {
+            "base_color": [],
+            "ao": [],
+            "normal": [],
+            "bump": [],
+            "refl_roughness": [], # Roughness
+            "glossiness": [],
+            "metalness": [],
+            "refl_weight": [], # Specular Weight
+            "opacity_color": [],
+            "emission_color": [],
+            "displacement": [],
+            "translucency": [],
+            "other": []
         }
+        
+        created_nodes = [] # To select later
 
         with graph.BeginTransaction() as transaction:
+            # --- Phase 1: Create All Nodes & Classify ---
             for tex_path in texture_files:
                 # Create Texture Node
                 tex_node = redshift_utils.create_texture_node(graph, tex_path)
                 created_nodes.append(tex_node)
                 
-                # 파일 이름 추출
+                # Extract Info
                 fname = os.path.basename(tex_path)
-
-                # 채널 감지
                 channel = redshift_utils.GetTextureChannel(fname)
                 
-                # 노드 이름 설정
+                # Set Node Name
                 node_name = fname
-                # if channel:
-                #     채널 이름이 감지되면 노드 이름을 채널 이름으로 변경
-                #     node_name = CHANNEL_SUFFIXES.get(channel, channel.replace("_", " ").title())
                 tex_node.SetValue("net.maxon.node.base.name", node_name)
                 
-                if not channel:
-                    continue
+                if channel:
+                     if channel in detected_maps:
+                         detected_maps[channel].append(tex_node)
+                     else:
+                         detected_maps["other"].append(tex_node)
+                         
+                     # Pre-set Raw Color Space for non-color data
+                     if channel not in ["base_color", "emission_color", "opacity_color", "translucency"]:
+                          redshift_utils.set_colorspace_raw(tex_node)
+                else:
+                    detected_maps["other"].append(tex_node)
 
-                # 연결 로직
-                tex_out = tex_node.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
-                
-                if channel == "base_color":
-                    if not connected_flags["base_color"]:
-                        target = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_BASE_COLOR)
-                        if target.IsValid():
-                            redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_BASE_COLOR)
-                            tex_out.Connect(target)
-                            connected_flags["base_color"] = True
-                
-                if channel == "ao":
-                    redshift_utils.set_colorspace_raw(tex_node)
-                    mul_node = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_MATH_VECTOR_MULTIPLY)
-                    created_nodes.append(mul_node)
-                    if mul_node:
-                        target = mul_node.GetInputs().FindChild(redshift_utils.PORT_RS_MATH_VECTOR_MULTIPLY_INPUT2)
-                        if target.IsValid():
-                            tex_out.Connect(target)
+            # --- Phase 2: Logic & Connections ---
+            
+            # Helper to get first node if exists
+            def get_first_node(channel_key):
+                nodes = detected_maps.get(channel_key)
+                return nodes[0] if nodes else None
 
-                elif channel == "metalness":
-                    redshift_utils.set_colorspace_raw(tex_node)
-                    if not connected_flags["metalness"]:
-                        target = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_METALNESS)
-                        if target.IsValid():
-                            redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_METALNESS)
-                            tex_out.Connect(target)
-                            connected_flags["metalness"] = True
+            # --- A. Base Color & AO ---
+            tex_base = get_first_node("base_color")
+            tex_ao = get_first_node("ao")
+            
+            if tex_base and tex_ao:
+                # Multiply Logic
+                mul_node = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_MATH_VECTOR_MULTIPLY)
+                created_nodes.append(mul_node)
+                mul_node.SetValue("net.maxon.node.base.name", "BaseColor * AO")
                 
-                elif channel == "refl_roughness":
-                    redshift_utils.set_colorspace_raw(tex_node)
-                    if not connected_flags["refl_roughness"]:
-                        target = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_ROUGHNESS)
-                        if target.IsValid():
-                            redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_ROUGHNESS)
-                            tex_out.Connect(target)
-                            connected_flags["refl_roughness"] = True
-                        
-                elif channel == "refl_weight":
-                    redshift_utils.set_colorspace_raw(tex_node)
-                    if not connected_flags["refl_weight"]:
-                        target = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_SPECULAR)
-                        if target.IsValid():
-                            redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_SPECULAR)
-                            tex_out.Connect(target)
-                            connected_flags["refl_weight"] = True
+                # Connect Base -> Input 1
+                base_out = tex_base.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
+                mul_in1 = mul_node.GetInputs().FindChild(redshift_utils.PORT_RS_MATH_VECTOR_MULTIPLY_INPUT1)
+                if base_out and mul_in1: base_out.Connect(mul_in1)
                 
-                elif channel == "glossiness":
-                    redshift_utils.set_colorspace_raw(tex_node)
+                # Connect AO -> Input 2
+                ao_out = tex_ao.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
+                mul_in2 = mul_node.GetInputs().FindChild(redshift_utils.PORT_RS_MATH_VECTOR_MULTIPLY_INPUT2)
+                if ao_out and mul_in2: ao_out.Connect(mul_in2)
+                
+                # Connect Multiply -> Material Base Color
+                mul_out = mul_node.GetOutputs().FindChild(redshift_utils.PORT_RS_MATH_VECTOR_MULTIPLY_OUT)
+                mat_base = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_BASE_COLOR)
+                if mul_out and mat_base:
+                    redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_BASE_COLOR)
+                    mul_out.Connect(mat_base)
+            
+            elif tex_base:
+                # Only Base Color
+                base_out = tex_base.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
+                mat_base = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_BASE_COLOR)
+                if base_out and mat_base:
+                    redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_BASE_COLOR)
+                    base_out.Connect(mat_base)
+            
+            elif tex_ao:
+                # Only AO (Create Multiply but don't connect to material)
+                mul_node = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_MATH_VECTOR_MULTIPLY)
+                created_nodes.append(mul_node)
+                mul_node.SetValue("net.maxon.node.base.name", "AO Multiply")
+                
+                ao_out = tex_ao.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
+                mul_in2 = mul_node.GetInputs().FindChild(redshift_utils.PORT_RS_MATH_VECTOR_MULTIPLY_INPUT2)
+                if ao_out and mul_in2: ao_out.Connect(mul_in2)
+
+
+            # --- B. Normal & Bump ---
+            tex_normal = get_first_node("normal")
+            tex_bump = get_first_node("bump")
+            
+            chosen_bump_node = None
+            is_normal_map = False
+            
+            if tex_normal and tex_bump:
+                # Conflict! Ask user.
+                # Yes = Normal, No = Bump
+                
+                result = c4d.gui.QuestionDialog("Normal and Bump maps detected.\nUse Normal Map? (Yes = Normal, No = Bump)")
+                if result:
+                    chosen_bump_node = tex_normal
+                    is_normal_map = True
+                else:
+                    chosen_bump_node = tex_bump
+                    is_normal_map = False
+            elif tex_normal:
+                chosen_bump_node = tex_normal
+                is_normal_map = True
+            elif tex_bump:
+                chosen_bump_node = tex_bump
+                is_normal_map = False
+                
+            if chosen_bump_node:
+                # Create Bump Node
+                bump_node = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_BUMPMAP)
+                created_nodes.append(bump_node)
+                
+                # Set Type
+                bump_type_port = bump_node.GetInputs().FindChild(redshift_utils.PORT_RS_BUMP_TYPE)
+                if bump_type_port:
+                    # 1 = Tangent-Space Normal, 0 = Height Field
+                    bump_type_port.SetPortValue(1 if is_normal_map else 0)
+                
+                # Connect Texture -> Bump Node
+                tex_out = chosen_bump_node.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
+                bump_in = bump_node.GetInputs().FindChild(redshift_utils.PORT_RS_BUMP_INPUT)
+                if tex_out and bump_in: tex_out.Connect(bump_in)
+                
+                # Connect Bump Node -> Material
+                bump_out = bump_node.GetOutputs().FindChild(redshift_utils.PORT_RS_BUMP_OUT)
+                mat_bump = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_BUMP_INPUT)
+                if bump_out and mat_bump:
+                    redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_BUMP_INPUT)
+                    bump_out.Connect(mat_bump)
+
+
+            # --- C. Roughness & Glossiness ---
+            tex_rough = get_first_node("refl_roughness")
+            tex_gloss = get_first_node("glossiness")
+            
+            target_rough_node = None
+            use_invert = False
+            
+            if tex_rough and tex_gloss:
+                # Conflict!
+                # Yes = Roughness, No = Glossiness
+                result = c4d.gui.QuestionDialog("Roughness and Glossiness maps detected.\nUse Roughness Map? (Yes = Roughness, No = Glossiness)")
+                if result:
+                    target_rough_node = tex_rough
+                    use_invert = False
+                else:
+                    target_rough_node = tex_gloss
+                    use_invert = True
+            elif tex_rough:
+                target_rough_node = tex_rough
+                use_invert = False
+            elif tex_gloss:
+                target_rough_node = tex_gloss
+                use_invert = True
+            
+            if target_rough_node:
+                tex_out = target_rough_node.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
+                mat_rough = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_ROUGHNESS)
+                
+                if use_invert:
+                    # Glossiness -> Invert -> Roughness
                     inv_node = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_MATH_INVERT)
                     created_nodes.append(inv_node)
-                    if inv_node:
-                        target = inv_node.GetInputs().FindChild(redshift_utils.PORT_RS_MATH_INVERT_INPUT)
-                        if target.IsValid():
-                            tex_out.Connect(target)
+                    inv_node.SetValue("net.maxon.node.base.name", "Invert Glossiness")
+                    
+                    inv_in = inv_node.GetInputs().FindChild(redshift_utils.PORT_RS_MATH_INVERT_INPUT)
+                    if tex_out and inv_in: tex_out.Connect(inv_in)
+                    
+                    inv_out = inv_node.GetOutputs().FindChild(redshift_utils.PORT_RS_MATH_INVERT_OUTPUT) # Assuming standard out
+                    # Check utility for invert output (usually 'out')
+                    # redshift_utils doesn't have PORT_RS_MATH_INVERT_OUT defined in the snippet I saw? 
+                    # Usually it's just 'outColor' or similar. 
+                    # Let's assume generic output if needed, or check redshift_utils.
+                    # Standard RS Math nodes usually output 'out'.
+                    if not inv_out: inv_out = inv_node.GetOutputs().FindChild("outColor") 
 
-                elif channel == "opacity_color":
-                    redshift_utils.set_colorspace_raw(tex_node)
-                    if not connected_flags["opacity_color"]:
-                        target = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_OPACITY)
-                        if target.IsValid():
-                            redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_OPACITY)
-                            tex_out.Connect(target)
-                            connected_flags["opacity_color"] = True
+                    if inv_out and mat_rough:
+                        redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_ROUGHNESS)
+                        inv_out.Connect(mat_rough)
+                else:
+                    # Direct Roughness
+                    if tex_out and mat_rough:
+                        redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_ROUGHNESS)
+                        tex_out.Connect(mat_rough)
+
+
+            # --- D. Other Simple Channels ---
+            
+            # Metalness
+            tex_metal = get_first_node("metalness")
+            if tex_metal:
+                tex_out = tex_metal.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
+                mat_metal = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_METALNESS)
+                if tex_out and mat_metal:
+                    redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_METALNESS)
+                    tex_out.Connect(mat_metal)
+
+            # Specular Weight
+            tex_spec = get_first_node("refl_weight")
+            if tex_spec:
+                tex_out = tex_spec.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
+                mat_spec = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_SPECULAR)
+                if tex_out and mat_spec:
+                     redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_SPECULAR)
+                     tex_out.Connect(mat_spec)
+            
+            # Opacity
+            tex_opac = get_first_node("opacity_color")
+            if tex_opac:
+                tex_out = tex_opac.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
+                mat_opac = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_OPACITY)
+                if tex_out and mat_opac:
+                     redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_OPACITY)
+                     tex_out.Connect(mat_opac)
+
+            # Emission
+            tex_emiss = get_first_node("emission_color")
+            if tex_emiss:
+                tex_out = tex_emiss.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
+                mat_emiss = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_EMISSION)
+                if tex_out and mat_emiss:
+                     redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_EMISSION)
+                     tex_out.Connect(mat_emiss)
+            
+            # Displacement
+            tex_disp = get_first_node("displacement")
+            if tex_disp and output_node:
+                disp_node = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_DISPLACEMENT)
+                created_nodes.append(disp_node)
+                disp_node.SetValue("net.maxon.node.base.name", "Displacement")
                 
-                elif channel == "emission_color":
-                    if not connected_flags["emission_color"]:
-                        target = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_EMISSION)
-                        if target.IsValid():
-                            redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_EMISSION)
-                            tex_out.Connect(target)
-                            connected_flags["emission_color"] = True
-                        
-                elif channel == "normal":
-                    redshift_utils.set_colorspace_raw(tex_node)
-                    # Create Bump Map Node (Type 1001 for Tangent Space Normal)
-                    if not connected_flags["bump_input"] or connected_flags["bump_input"] == "Bump":
-                        bump_node = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_BUMPMAP)
-                        created_nodes.append(bump_node)
-                        # bump_node.SetValue("net.maxon.node.base.name", "Normal")
-                        
-                        # Set Input Type to 1001 (Tangent-Space Normal)
-                        bump_type_port = bump_node.GetInputs().FindChild(redshift_utils.PORT_RS_BUMP_TYPE)
-                        if bump_type_port.IsValid():
-                            bump_type_port.SetPortValue(1) # Normal
-                            
-                        # Connect Texture -> Bump Node
-                        bump_in = bump_node.GetInputs().FindChild(redshift_utils.PORT_RS_BUMP_INPUT)
-                        if bump_in.IsValid():
-                            tex_out.Connect(bump_in)
-                        
-                        # Connect Bump Node -> Standard Material
-                        bump_out = bump_node.GetOutputs().FindChild(redshift_utils.PORT_RS_BUMP_OUT)
-                        std_bump_in = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_BUMP_INPUT)
-                        if bump_out.IsValid() and std_bump_in.IsValid():
-                            redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_BUMP_INPUT)
-                            bump_out.Connect(std_bump_in)
-                            connected_flags["bump_input"] = "Normal"
- 
-                elif channel == "bump":
-                    redshift_utils.set_colorspace_raw(tex_node)
-                    # Create Bump Map Node (Type 1000 for Height Field)
-                    if not connected_flags["bump_input"]:
-                        bump_node = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_BUMPMAP)
-                        created_nodes.append(bump_node)
-                        # bump_node.SetValue("net.maxon.node.base.name", "Bump")
-                        
-                        # Set Input Type to 1000
-                        bump_type_port = bump_node.GetInputs().FindChild(redshift_utils.PORT_RS_BUMP_TYPE)
-                        if bump_type_port.IsValid():
-                            bump_type_port.SetPortValue(0) # Bump
-                        
-                        # Connect Texture -> Bump Node
-                        bump_in = bump_node.GetInputs().FindChild(redshift_utils.PORT_RS_BUMP_INPUT)
-                        if bump_in.IsValid():
-                            tex_out.Connect(bump_in)
-                        
-                        # Connect Bump Node -> Standard Material
-                        bump_out = bump_node.GetOutputs().FindChild(redshift_utils.PORT_RS_BUMP_OUT)
-                        std_bump_in = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_BUMP_INPUT)
-                        if bump_out.IsValid() and std_bump_in.IsValid():
-                            redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_BUMP_INPUT)
-                            bump_out.Connect(std_bump_in)
-                            connected_flags["bump_input"] = "Bump"
+                # Tex -> Disp
+                tex_out = tex_disp.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
+                disp_in = disp_node.GetInputs().FindChild(redshift_utils.PORT_RS_DISP_TEXMAP)
+                if tex_out and disp_in: tex_out.Connect(disp_in)
+                
+                # Disp -> Output
+                disp_out = disp_node.GetOutputs().FindChild(redshift_utils.PORT_RS_DISP_OUT)
+                out_disp_in = output_node.GetInputs().FindChild(redshift_utils.PORT_RS_OUTPUT_DISPLACEMENT)
+                if disp_out and out_disp_in:
+                    redshift_utils.remove_connections(output_node, redshift_utils.PORT_RS_OUTPUT_DISPLACEMENT)
+                    disp_out.Connect(out_disp_in)
 
-                elif channel == "displacement":
-                    redshift_utils.set_colorspace_raw(tex_node)
-                    if not connected_flags["displacement"] and output_node:
-                        disp_node = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_DISPLACEMENT)
-                        created_nodes.append(disp_node)
-                        disp_node.SetValue("net.maxon.node.base.name", "Displacement")
-                        
-                        # Connect Texture -> Displacement Node
-                        disp_in = disp_node.GetInputs().FindChild(redshift_utils.PORT_RS_DISP_TEXMAP)
-                        if disp_in.IsValid():
-                            tex_out.Connect(disp_in)
-                        
-                        # Connect Displacement Node -> Output Node
-                        disp_out = disp_node.GetOutputs().FindChild(redshift_utils.PORT_RS_DISP_OUT)
-                        out_disp_in = output_node.GetInputs().FindChild(redshift_utils.PORT_RS_OUTPUT_DISPLACEMENT)
-                        if disp_out.IsValid() and out_disp_in.IsValid():
-                            redshift_utils.remove_connections(output_node, redshift_utils.PORT_RS_OUTPUT_DISPLACEMENT)
-                            disp_out.Connect(out_disp_in)
-                            connected_flags["displacement"] = True
-
-            # 6. Select and Arrange
+            
+            # --- Phase 3: Selection & Arrange ---
             maxon.GraphModelHelper.DeselectAll(graph, maxon.NODE_KIND.NODE)
             
             for node in created_nodes:
                 if node.IsValid():
                     maxon.GraphModelHelper.SelectNode(node)
-            
-            if standard_mat.IsValid():
-                maxon.GraphModelHelper.SelectNode(standard_mat)
-            if output_node.IsValid():
-                maxon.GraphModelHelper.SelectNode(output_node)
+                    
+            if standard_mat.IsValid(): maxon.GraphModelHelper.SelectNode(standard_mat)
+            if output_node.IsValid(): maxon.GraphModelHelper.SelectNode(output_node)
 
             transaction.Commit()
         

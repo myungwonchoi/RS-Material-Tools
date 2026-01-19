@@ -3,6 +3,7 @@ import maxon
 import os
 import sys
 import shutil
+import re
 
 # Add utils path
 current_dir = os.path.dirname(__file__)
@@ -33,6 +34,37 @@ ID_BTN_ORIGINAL = 1001
 ID_BTN_RESIZE = 1002
 ID_MENU_OPEN_TEX = 2001
 ID_MENU_DELETE_UNUSED = 2002
+
+def ResolveTexturePath(doc, path_str):
+    """Resolves a texture path to an absolute path."""
+    if not path_str or not doc:
+        return None
+    
+    # Already absolute?
+    if os.path.isabs(path_str):
+        return path_str if os.path.exists(path_str) else None
+
+    # Resolve relative
+    doc_path = doc.GetDocumentPath()
+    if not doc_path:
+        return None
+        
+    cand1 = os.path.join(doc_path, path_str)
+    if os.path.exists(cand1):
+        return cand1
+        
+    cand2 = os.path.join(doc_path, "tex", path_str)
+    if os.path.exists(cand2):
+        return cand2
+        
+    return None
+
+def GetRootTextureName(filename):
+    """Strips sequence of '_Low' suffixes to find the root name."""
+    name, ext = os.path.splitext(filename)
+    while name.endswith("_Low"):
+        name = name[:-4]
+    return name, ext
 
 class TextureObject(object):
     """Stores data for a single row in the TreeView."""
@@ -75,7 +107,7 @@ class TextureTreeViewFunctions(c4d.gui.TreeViewFunctions):
         self.color_background_alternate = c4d.COLOR_BG_DARK1
         self.color_background_selected = c4d.COLOR_BG_HIGHLIGHT
         
-        self.col_padding = 20
+        self.col_padding = 10
         self.text_offset_x = 5
 
     def SetTextureList(self, texture_list):
@@ -129,11 +161,8 @@ class TextureTreeViewFunctions(c4d.gui.TreeViewFunctions):
         with graph.BeginTransaction() as transaction:
             if mode == c4d.SELECTION_NEW:
                 # Deselect all in internal list
-                for t in self.texture_list:
-                    t.Deselect()
-                    if t.node.IsValid():
-                         maxon.GraphModelHelper.DeselectNode(t.node)
-                
+                maxon.GraphModelHelper.DeselectAll(graph, maxon.NODE_KIND.NODE)
+
                 # Select target
                 obj.Select()
                 if obj.node.IsValid():
@@ -154,11 +183,11 @@ class TextureTreeViewFunctions(c4d.gui.TreeViewFunctions):
         # Trigger Event to update Node Editor
         c4d.EventAdd()
 
-    def GetName(self, root, userdata, obj):
-        return str(obj)
+    # def GetName(self, root, userdata, obj):
+    #     return str(obj)
     
-    def SetName(self, root, userdata, obj, name):
-        pass
+    # def SetName(self, root, userdata, obj, name):
+    #     pass
 
     def GetId(self, root, userdata, obj):
         return hash(obj)
@@ -167,16 +196,16 @@ class TextureTreeViewFunctions(c4d.gui.TreeViewFunctions):
         if col == 1: # Filename
             if obj:
                  return area.DrawGetTextWidth(obj.filename) + self.col_padding
-            return 150
+            return 100
         elif col == 2: # Resolution
             if obj:
                  return area.DrawGetTextWidth(obj.resolution_str) + self.col_padding
-            return 100
+            return 50
         elif col == 3: # File Size
             if obj:
                  return area.DrawGetTextWidth(obj.size_str) + self.col_padding
-            return 80
-        return 100
+            return 50
+        return 50
 
     def GetHeaderColumnWidth(self, root, userdata, col, area):
          return self.GetColumnWidth(root, userdata, None, col, area)
@@ -336,45 +365,41 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
         if not doc: return
 
         # Get Materials
-        mat = doc.GetActiveMaterials()[0]
+        mat = doc.GetActiveMaterials()
+        if not mat: return
+        mat = mat[0]
+
         nodes_found = []
         
-        if mat:
-            nodeMaterial = mat.GetNodeMaterialReference()
-            if nodeMaterial.HasSpace(redshift_utils.ID_RS_NODESPACE):
-                graph = nodeMaterial.GetGraph(redshift_utils.ID_RS_NODESPACE)
-                if not graph.IsNullValue():
-                    # 1. Collect ALL Texture Nodes
-                    root = graph.GetViewRoot()
-                    children = []
-                    root.GetChildren(children, maxon.NODE_KIND.NODE)
-                    
-                    all_texture_nodes = []
-                    for node in children:
-                        if not node.IsValid(): continue
-                        # Check Asset ID
-                        # Some nodes might not have assetid attribute? 
-                        # Try/Except or Check
-                        try:
-                            asset_id = node.GetValue("net.maxon.node.attribute.assetid")[0]
-                            if asset_id == redshift_utils.ID_RS_TEXTURESAMPLER:
-                                all_texture_nodes.append(node)
-                        except:
-                            pass
+        nodeMaterial = mat.GetNodeMaterialReference()
+        if nodeMaterial.HasSpace(redshift_utils.ID_RS_NODESPACE):
+            graph = nodeMaterial.GetGraph(redshift_utils.ID_RS_NODESPACE)
+            if not graph.IsNullValue():
+                # 1. Collect ALL Texture Nodes
+                root = graph.GetViewRoot()
+                children = []
+                root.GetChildren(children, maxon.NODE_KIND.NODE)
+                
+                all_texture_nodes = []
+                for node in children:
+                    if not node.IsValid(): continue
+                    try:
+                        asset_id = node.GetValue("net.maxon.node.attribute.assetid")[0]
+                        if asset_id == redshift_utils.ID_RS_TEXTURESAMPLER:
+                            all_texture_nodes.append(node)
+                    except:
+                        pass
 
-                    # 2. Identify Selected Nodes (to mark them in TreeView)
-                    selected_nodes_list = []
-                    maxon.GraphModelHelper.GetSelectedNodes(graph, maxon.NODE_KIND.NODE, lambda node: selected_nodes_list.append(node) or True)
-                    # Convert to unique IDs or verify by equality?
-                    # Maxon GraphNodes are objects, equality logic should work for same graph instances.
-                    
-                    nodes_found = all_texture_nodes
+                # 2. Identify Selected Nodes
+                selected_nodes_list = []
+                maxon.GraphModelHelper.GetSelectedNodes(graph, maxon.NODE_KIND.NODE, lambda node: selected_nodes_list.append(node) or True)
+                
+                nodes_found = all_texture_nodes
 
         # Build Texture Objects
         new_list = []
         for node in nodes_found:
-            # Check if this node is in selected_nodes_list
-            # Equality check for GraphNode
+            # Check selection
             is_selected = False
             for sel_node in selected_nodes_list:
                 if sel_node == node:
@@ -388,27 +413,16 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
                 if val:
                     current_path = str(val) if not isinstance(val, maxon.Url) else val.GetSystemPath()
             
-            # Resolve absolute path for resolution info
-            abs_path = current_path
-            doc_path = doc.GetDocumentPath()
-            if not os.path.isabs(current_path):
-                 # Try relative paths
-                 if doc_path:
-                     cand1 = os.path.join(doc_path, current_path)
-                     cand2 = os.path.join(doc_path, "tex", current_path)
-                     if os.path.exists(cand1):
-                         abs_path = cand1
-                     elif os.path.exists(cand2):
-                         abs_path = cand2
+            # Use Helper
+            abs_path = ResolveTexturePath(doc, current_path)
             
-            # Default values
             # Default values
             filename = os.path.basename(current_path) if current_path else "No Path"
             res_str = "Unknown"
             size_str = "Unknown"
 
             # Load validation info if file exists
-            if abs_path and os.path.exists(abs_path):
+            if abs_path:
                 # Calculate file size
                 try:
                     size_bytes = os.path.getsize(abs_path)
@@ -418,14 +432,21 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
                     print(f"Error getting file size for {filename}: {e}")
                     size_str = "Error"
 
+                res_found = False
                 if Image:
                     try:
                         with Image.open(abs_path) as img:
                             res_str = f"{img.width}x{img.height}"
+                            res_found = True
                     except Exception as e:
-                        print(f"Error reading texture info for {filename}: {e}")
-                else:
-                    res_str = "PIL Missing"
+                        print(f"PIL failed for {filename}: {e}")
+                
+                if not res_found:
+                    # Fallback removed as per Refactoring Plan (EXR/HDR treated as Unsupported)
+                    filename = "Unsupported Format"
+                    res_str = "Load Failed"
+                    if not Image:
+                            res_str = "PIL Missing"
             
             new_list.append(TextureObject(node, current_path, filename, res_str, size_str, is_selected))
 
@@ -447,13 +468,12 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
 
     def ResizeTo50percent(self):
         doc = c4d.documents.GetActiveDocument()
-        doc_path = doc.GetDocumentPath() # Re-fetch to be safe
-        tex_folder = os.path.join(doc_path, "tex") if doc_path else "" # Warning if no doc path?
-        
+        doc_path = doc.GetDocumentPath()
         if not doc_path:
              c4d.gui.MessageDialog("Please save project first.")
              return
-
+             
+        tex_folder = os.path.join(doc_path, "tex")
         if not os.path.exists(tex_folder):
             try:
                 os.makedirs(tex_folder)
@@ -462,8 +482,7 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
 
         selected_objs = [obj for obj in self.texture_list if obj.selected]
         if not selected_objs:
-             # If nothing selected, process ALL
-             selected_objs = self.texture_list
+             selected_objs = self.texture_list # Process ALL if none selected
 
         if not selected_objs:
              c4d.gui.MessageDialog("No textures to resize.")
@@ -471,46 +490,21 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
 
         processed = 0
         
-        # Import reuse function
-        # Or define it here as static/method
-        # We'll use the one from before but adapted
-        
         for obj in selected_objs:
-             # Logic from previous script
-             # 1. Get current absolute path
-             current_path = obj.path
-             # Resolve absolute again...
-             abs_path = current_path
-             if not os.path.isabs(current_path):
-                 cand = os.path.join(doc_path, current_path)
-                 if os.path.exists(cand): abs_path = cand
-                 else:
-                     cand = os.path.join(doc_path, "tex", current_path)
-                     if os.path.exists(cand): abs_path = cand
+             # Use Helper
+             abs_path = ResolveTexturePath(doc, obj.path)
 
-             if not abs_path or not os.path.exists(abs_path):
-                 print(f"File not found: {current_path}")
+             if not abs_path:
+                 print(f"File not found: {obj.path}")
                  continue
 
-             filename = os.path.basename(current_path)
+             filename = os.path.basename(abs_path)
              name, ext = os.path.splitext(filename)
-             
-             # Prevent re-resizing if already low?
-             # User logic: "Resize to 50%". If already low, it will become smaller.
-             # But usually we check suffix.
-             # User script logic didn't check input name, just appended _Low.
-             # Let's ensure we validly append _Low.
-             
-             # If it already ends in _Low, do we add another?
-             # "texture_Low_Low.jpg" ?
-             # Let's assume yes, or clean it. 
-             # Let's just append _Low as requested.
              
              new_filename = f"{name}_Low{ext}"
              target_path = os.path.join(tex_folder, new_filename)
              
-             # Copy original to tex folder if it's not already there
-             # This ensures we have a backup/local copy of the original
+             # Copy original backup
              original_in_tex = os.path.join(tex_folder, filename)
              if os.path.abspath(abs_path) != os.path.abspath(original_in_tex):
                  if not os.path.exists(original_in_tex):
@@ -521,17 +515,13 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
                          print(f"Failed to copy original: {e}")
 
              try:
-                 resize_and_strip_metadata(abs_path, target_path)
+                 # Check if target already exists
+                 if os.path.exists(target_path):
+                     print(f"Resized file already exists, skipping resize: {target_path}")
+                 else:
+                     resize_and_strip_metadata(abs_path, target_path)
                  
                  # Set Port
-                 # Need graph transaction? Ideally yes.
-                 # But we have the node.
-                 # Let's wrap in transaction if possible, or just SetValue (Model interface)
-                 # Get Inputs returns a GraphNode, we can set value.
-                 
-                 # We need the graph to start a transaction.
-                 # Let's assume we can get it from the node or pass it.
-                 # Accessing graph from node:
                  graph = obj.node.GetGraph()
                  with graph.BeginTransaction() as t:
                      path_port = obj.node.GetInputs().FindChild(redshift_utils.PORT_RS_TEX_PATH).FindChild("path")
@@ -547,12 +537,10 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
             c4d.EventAdd()
 
     def Original(self):
-        # "Original 버튼을 누르면 만약 텍스쳐 이름이 _Low로 끝나는지 확인하고, 
-        # 그렇다면 _Low를 지운 경로를 tex0에 적용해서 원래 텍스쳐에 연결되도록 해."
+        doc = c4d.documents.GetActiveDocument()
         
         selected_objs = [obj for obj in self.texture_list if obj.selected]
         if not selected_objs:
-             # If nothing selected, process ALL
              selected_objs = self.texture_list
              
         processed = 0
@@ -560,36 +548,23 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
         for obj in selected_objs:
             current_path = obj.path
             filename = os.path.basename(current_path)
-            name, ext = os.path.splitext(filename)
             
-            if name.endswith("_Low"):
-                # Remove all trailing _Low
-                base_name = name
-                while base_name.endswith("_Low"):
-                    base_name = base_name[:-4]
+            # Use Helper to find root name
+            base_name, ext = GetRootTextureName(filename)
+            original_name = base_name + ext
                 
-                original_name = base_name + ext
-                # We need to find where this original file is.
-                # Assuming it is in 'tex' folder or same folder?
-                # "원래 텍스쳐에 연결되도록 해" -> Just change the path string?
-                # We should probably check if it exists in the same directory.
-                
-                dir_path = os.path.dirname(current_path)
-                # If path was just filename, dir_path is empty.
-                
-                if not dir_path:
-                    # It was likely in tex folder or next to doc
-                    # Let's assume same directory as the _Low file
-                    pass
-                    
-                new_path_str = os.path.join(dir_path, original_name)
-                
-                graph = obj.node.GetGraph()
-                with graph.BeginTransaction() as t:
-                     path_port = obj.node.GetInputs().FindChild(redshift_utils.PORT_RS_TEX_PATH).FindChild("path")
-                     path_port.SetPortValue(new_path_str)
-                     t.Commit()
-                processed += 1
+            # Assume original is in same dir as current (often 'tex') or doc root
+            # Only change the name in the path
+            dir_path = os.path.dirname(current_path)
+            new_path_str = os.path.join(dir_path, original_name)
+            
+            # Update Graph
+            graph = obj.node.GetGraph()
+            with graph.BeginTransaction() as t:
+                 path_port = obj.node.GetInputs().FindChild(redshift_utils.PORT_RS_TEX_PATH).FindChild("path")
+                 path_port.SetPortValue(new_path_str)
+                 t.Commit()
+            processed += 1
 
         if processed > 0:
             self.RefreshTextureList()
@@ -629,7 +604,7 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
              return
              
         # Confirm dialog
-        if not c4d.gui.QuestionDialog("Delete unused intermediate '_Low' textures for selected items?\nThis cannot be undone."):
+        if not c4d.gui.QuestionDialog("Delete unused resized textures for selected textures?\nThis cannot be undone."):
             return
 
         deleted_files = []
@@ -638,28 +613,18 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
             current_path = obj.path
             if not current_path: continue
             
-            # Resolve absolute path
-            abs_path = current_path
-            if not os.path.isabs(current_path) and doc_path:
-                 cand1 = os.path.join(doc_path, current_path)
-                 cand2 = os.path.join(doc_path, "tex", current_path)
-                 if os.path.exists(cand1):
-                     abs_path = cand1
-                 elif os.path.exists(cand2):
-                     abs_path = cand2
+            # Use Helper
+            abs_path = ResolveTexturePath(doc, current_path)
             
             # Need a valid directory path
-            if not os.path.exists(abs_path):
+            if not abs_path:
                 continue
                 
             dir_path = os.path.dirname(abs_path)
             filename = os.path.basename(abs_path)
-            name, ext = os.path.splitext(filename)
             
-            # 1. Identify Base Name (Original Name)
-            base_name = name
-            while base_name.endswith("_Low"):
-                base_name = base_name[:-4]
+            # Use Helper
+            base_name, ext = GetRootTextureName(filename)
             
             # 2. Scan directory
             try:
@@ -694,6 +659,11 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
 
 
 def resize_and_strip_metadata(input_path, output_path):
+    # EXR / HDR Check -> Unsupported
+    ext = os.path.splitext(input_path)[1].lower()
+    if ext in ['.exr', '.hdr']:
+        raise Exception(f"Unsupported format: {ext}")
+
     if not Image:
         raise ImportError("PIL not loaded")
     
