@@ -99,63 +99,139 @@ def ask_open_filenames(title="Select Files"):
             
     return []
 
-class CreatePBRMaterialCommand(c4d.plugins.CommandData):
-    def Execute(self, doc):
-        c4d.CallCommand(465002211) # Node Editor
+class PBRRunnerDialog(c4d.gui.GeDialog):
+    def __init__(self):
+        self.texture_files = [] # initialize empty list
+
+    def CreateLayout(self):
+        self.SetTitle("PBR Texture Setup")
+        if self.GroupBegin(0, c4d.BFH_SCALEFIT | c4d.BFV_SCALEFIT, 1, 0, "", 0):
+            self.AddStaticText(1002, c4d.BFH_CENTER | c4d.BFH_SCALEFIT, name="Initializing Texture Loader...")
+        self.GroupEnd()
+        return True
+
+    def InitValues(self):
+        # 0 = Load Files, 1 = Create Nodes
+        self.trigger_step = 0
+        self.SetTimer(100) # Short delay to ensure dialog shows up before file picker
+        return True
+
+    def Command(self, id, msg):
+        return True
+
+    def Timer(self, msg):
+        self.SetTimer(0)
+        
+        if self.trigger_step == 0:
+            # Step 1: Load Files
+            self.LoadTextureFiles()
+            
+            if self.texture_files:
+                # If files loaded, wait a bit before processing (User's request)
+                self.trigger_step = 1
+                self.SetTimer(200) # Delay after loading
+            else:
+                # User cancelled or no files
+                self.Close()
+        
+        elif self.trigger_step == 1:
+            # Step 2: Create, Arrange, Close
+            self.CreateMaterialNodes()
+            
+            # Restore Arrange Logic
+            c4d.EventAdd() 
+            c4d.CallCommand(465002311) # Arrange Selected Nodes
+            c4d.EventAdd()
+            
+            self.Close()
+
+    def LoadTextureFiles(self):
         # 0. Load Textures (Windows API Multi-Select)
-        texture_files = ask_open_filenames(title="Load Texture Files...")
-
-        if not texture_files:
-            return True
-
-        # 1. Always Create New Redshift Material
-        c4d.CallCommand(300001026) # Deselect All Materials
-        c4d.CallCommand(1040264, 1012) # Materials > Redshift > Standard Material
-        
-        doc = c4d.documents.GetActiveDocument()
-        mat = doc.GetActiveMaterial()
-        if not mat:
-            return True
-
-        nodeMaterial = mat.GetNodeMaterialReference()
-        # if not nodeMaterial.HasSpace(redshift_utils.ID_RS_NODESPACE):
-        #     c4d.gui.MessageDialog("선택한 머티리얼이 레드쉬프트 노드 머티리얼이 아닙니다.")
-        #     return True
-
-        graph = nodeMaterial.GetGraph(redshift_utils.ID_RS_NODESPACE)
-        if graph.IsNullValue():
-            return True
-
-        # 2. Find Standard Material
-        standard_mat, output_node = redshift_utils.find_standard_material_and_output(graph)
-        
-        # if not standard_mat:
-        #     c4d.gui.MessageDialog("Standard Material 노드를 찾을 수 없습니다.")
-        #     return True
+        files = ask_open_filenames(title="Load Texture Files...")
+        if not files:
+            return
 
         # Logic: If 1 file selected, find others with same prefix
-        if len(texture_files) == 1:
-            sel_path = texture_files[0]
+        if len(files) == 1:
+            sel_path = files[0]
             dirname = os.path.dirname(sel_path)
             basename = os.path.basename(sel_path)
 
-            if "_" in basename:
-                prefix = basename.split("_")[0]
-                # Extensions from filter_str
+            # Use _split_into_components to get the prefix (first component)
+            components = redshift_utils._split_into_components(basename)
+
+            if components:
+                target_prefix = components[0]
+                # Extensions from filter_str (re-defined locally or access from outer scope if constant)
                 valid_exts = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".exr", ".hdr", ".psd", ".tga"}
                 
                 found_files = []
                 try:
                     for f in os.listdir(dirname):
-                        if f.startswith(prefix):
-                            ext = os.path.splitext(f)[1].lower()
-                            if ext in valid_exts:
-                                found_files.append(os.path.join(dirname, f))
+                        f_path = os.path.join(dirname, f)
+                        if not os.path.isfile(f_path):
+                            continue
+
+                        ext = os.path.splitext(f)[1].lower()
+                        if ext in valid_exts:
+                            f_comps = redshift_utils._split_into_components(f)
+                            if f_comps and f_comps[0] == target_prefix:
+                                found_files.append(f_path)
                     
                     if found_files:
-                        texture_files = found_files
+                        files = found_files
                 except Exception as e:
                     print(f"Directory scan error: {e}")
+        
+        self.texture_files = files
+        count = len(self.texture_files)
+        print(f"Loaded {count} texture files.")
+
+    def CreateMaterialNodes(self):
+        texture_files = self.texture_files
+        
+        if not texture_files:
+            return
+
+        # 1. Select Node Editor Redshift Material
+        c4d.CallCommand(300001026) # Deselect All Materials
+        c4d.CallCommand(465002328) # Select Active Material in Node Editor
+
+        doc = c4d.documents.GetActiveDocument()
+        mat = doc.GetActiveMaterial()
+        if not mat:
+            if c4d.gui.QuestionDialog("Please open the Material Node Editor to add textures.\nWould you like to create a new Material?"):
+                c4d.CallCommand(1040264, 1012) # Materials > Redshift > Standard Material
+                mat = doc.GetActiveMaterial()
+                if not mat:
+                    return
+            else:
+                return
+        
+        # Ensure Node Editor is Open and Focused
+        c4d.CallCommand(465002211) # Node Editor
+        
+        nodeMaterial = mat.GetNodeMaterialReference()
+        if not nodeMaterial.HasSpace(redshift_utils.ID_RS_NODESPACE):
+            if c4d.gui.QuestionDialog("Please open the Material Node Editor to add textures.\nWould you like to create a new Material?"):
+                c4d.CallCommand(1040264, 1012) # Materials > Redshift > Standard Material
+                mat = doc.GetActiveMaterial()
+                if not mat:
+                    return
+            else:
+                return
+
+        graph = nodeMaterial.GetGraph(redshift_utils.ID_RS_NODESPACE)
+        if graph.IsNullValue():
+            return
+
+        # 2. Find Standard Material
+        standard_mat, output_node = redshift_utils.find_standard_material_and_output(graph)
+        if not output_node:
+            c4d.gui.MessageDialog("Output Node (Redshift Material Output) not found!\nPlease select a valid Redshift Node Material.")
+            return
+            
+        # If standard_mat is missing, we will create it inside the transaction.
 
         # 5. Process Textures - New Logic: Scan First, Then Connect
         
@@ -179,6 +255,20 @@ class CreatePBRMaterialCommand(c4d.plugins.CommandData):
         created_nodes = [] # To select later
 
         with graph.BeginTransaction() as transaction:
+            # Check/Create Standard Material
+            if not standard_mat:
+                c4d.gui.MessageDialog("Standard Material node not found.\nCreating a new Standard Material and connecting to Output.")
+                standard_mat = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_STANDARD_MATERIAL)
+                created_nodes.append(standard_mat)
+                
+                # Connect to Output Surface
+                if output_node and standard_mat:
+                    mat_out = standard_mat.GetOutputs().FindChild(redshift_utils.PORT_RS_STD_OUTCOLOR)
+                    surf_in = output_node.GetInputs().FindChild(redshift_utils.PORT_RS_OUTPUT_SURFACE)
+                    if mat_out and surf_in:
+                        redshift_utils.remove_connections(output_node, redshift_utils.PORT_RS_OUTPUT_SURFACE)
+                        mat_out.Connect(surf_in)
+
             # --- Phase 1: Create All Nodes & Classify ---
             for tex_path in texture_files:
                 # Create Texture Node
@@ -220,7 +310,6 @@ class CreatePBRMaterialCommand(c4d.plugins.CommandData):
                 # Multiply Logic
                 mul_node = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_MATH_VECTOR_MULTIPLY)
                 created_nodes.append(mul_node)
-                mul_node.SetValue("net.maxon.node.base.name", "BaseColor * AO")
                 
                 # Connect Base -> Input 1
                 base_out = tex_base.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
@@ -232,26 +321,48 @@ class CreatePBRMaterialCommand(c4d.plugins.CommandData):
                 mul_in2 = mul_node.GetInputs().FindChild(redshift_utils.PORT_RS_MATH_VECTOR_MULTIPLY_INPUT2)
                 if ao_out and mul_in2: ao_out.Connect(mul_in2)
                 
-                # Connect Multiply -> Material Base Color
+                # Create Color Correct Node
+                cc_node = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_COLOR_CORRECT)
+                created_nodes.append(cc_node)
+                cc_node.SetValue("net.maxon.node.base.name", "Color Correct")
+
+                # Connect Multiply -> Color Correct
                 mul_out = mul_node.GetOutputs().FindChild(redshift_utils.PORT_RS_MATH_VECTOR_MULTIPLY_OUT)
+                cc_in = cc_node.GetInputs().FindChild(redshift_utils.PORT_RS_COLOR_CORRECT_INPUT)
+                if mul_out and cc_in: mul_out.Connect(cc_in)
+
+                # Connect Color Correct -> Material Base Color
+                cc_out = cc_node.GetOutputs().FindChild(redshift_utils.PORT_RS_COLOR_CORRECT_OUT)
                 mat_base = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_BASE_COLOR)
-                if mul_out and mat_base:
+
+                if cc_out and mat_base:
                     redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_BASE_COLOR)
-                    mul_out.Connect(mat_base)
+                    cc_out.Connect(mat_base)
             
             elif tex_base:
                 # Only Base Color
+                # Create Color Correct Node
+                cc_node = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_COLOR_CORRECT)
+                created_nodes.append(cc_node)
+                cc_node.SetValue("net.maxon.node.base.name", "Color Correct")
+
+                # Connect Base -> Color Correct
                 base_out = tex_base.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
+                cc_in = cc_node.GetInputs().FindChild(redshift_utils.PORT_RS_COLOR_CORRECT_INPUT)
+                if base_out and cc_in: base_out.Connect(cc_in)
+
+                # Connect Color Correct -> Material Base Color
+                cc_out = cc_node.GetOutputs().FindChild(redshift_utils.PORT_RS_COLOR_CORRECT_OUT)
                 mat_base = standard_mat.GetInputs().FindChild(redshift_utils.PORT_RS_STD_BASE_COLOR)
-                if base_out and mat_base:
+                
+                if cc_out and mat_base:
                     redshift_utils.remove_connections(standard_mat, redshift_utils.PORT_RS_STD_BASE_COLOR)
-                    base_out.Connect(mat_base)
+                    cc_out.Connect(mat_base)
             
             elif tex_ao:
                 # Only AO (Create Multiply but don't connect to material)
                 mul_node = graph.AddChild(maxon.Id(), redshift_utils.ID_RS_MATH_VECTOR_MULTIPLY)
                 created_nodes.append(mul_node)
-                mul_node.SetValue("net.maxon.node.base.name", "AO Multiply")
                 
                 ao_out = tex_ao.GetOutputs().FindChild(redshift_utils.PORT_RS_TEX_OUTCOLOR)
                 mul_in2 = mul_node.GetInputs().FindChild(redshift_utils.PORT_RS_MATH_VECTOR_MULTIPLY_INPUT2)
@@ -344,12 +455,7 @@ class CreatePBRMaterialCommand(c4d.plugins.CommandData):
                     inv_in = inv_node.GetInputs().FindChild(redshift_utils.PORT_RS_MATH_INVERT_INPUT)
                     if tex_out and inv_in: tex_out.Connect(inv_in)
                     
-                    inv_out = inv_node.GetOutputs().FindChild(redshift_utils.PORT_RS_MATH_INVERT_OUTPUT) # Assuming standard out
-                    # Check utility for invert output (usually 'out')
-                    # redshift_utils doesn't have PORT_RS_MATH_INVERT_OUT defined in the snippet I saw? 
-                    # Usually it's just 'outColor' or similar. 
-                    # Let's assume generic output if needed, or check redshift_utils.
-                    # Standard RS Math nodes usually output 'out'.
+                    inv_out = inv_node.GetOutputs().FindChild(redshift_utils.PORT_RS_MATH_INVERT_OUTPUT)
                     if not inv_out: inv_out = inv_node.GetOutputs().FindChild("outColor") 
 
                     if inv_out and mat_rough:
@@ -432,10 +538,17 @@ class CreatePBRMaterialCommand(c4d.plugins.CommandData):
 
             transaction.Commit()
         
-        c4d.CallCommand(465002311) # Arrange Selected Nodes
         c4d.EventAdd()
-        
-        return True
+
+class CreatePBRMaterialCommand(c4d.plugins.CommandData):
+    # Hold reference to dialog to prevent garbage collection
+    dialog = None
+
+    def Execute(self, doc):
+        # Create dialog instance
+        self.dialog = PBRRunnerDialog()
+        # Open asynchronously - this will run InitValues -> Timer -> RunPBRSetup -> Close
+        return self.dialog.Open(c4d.DLG_TYPE_ASYNC_POPUPEDIT, pluginid=PLUGIN_ID, defaultw=0, defaulth=0)
 
 if __name__ == "__main__":
     icon_path = os.path.join(os.path.dirname(__file__), "IMfine_PBR_Texture_Setup.tif")
@@ -447,7 +560,7 @@ if __name__ == "__main__":
 
     c4d.plugins.RegisterCommandPlugin(
         id=PLUGIN_ID,
-        str="Create PBR Material from Files...",
+        str="Auto Connect PBR Textures...",
         info=0,
         icon=bmp,
         help="Loads texture files and automatically connects them to the material.",

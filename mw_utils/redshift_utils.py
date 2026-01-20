@@ -18,6 +18,8 @@ ID_RS_MATH_ABS_VECTOR = maxon.Id("com.redshift3d.redshift4c4d.nodes.core.rsmatha
 ID_RS_TRIPLANAR = maxon.Id("com.redshift3d.redshift4c4d.nodes.core.triplanar")
 ID_RS_MATH_INVERT = maxon.Id("com.redshift3d.redshift4c4d.nodes.core.rsmathinv")
 
+ID_RS_COLOR_CORRECT = maxon.Id("com.redshift3d.redshift4c4d.nodes.core.rscolorcorrection")
+
 # Port IDs
 PORT_RS_STD_BASE_COLOR = "com.redshift3d.redshift4c4d.nodes.core.standardmaterial.base_color"
 PORT_RS_STD_METALNESS = "com.redshift3d.redshift4c4d.nodes.core.standardmaterial.metalness"
@@ -54,6 +56,9 @@ PORT_RS_UV_CONTEXT_PROJECTION_OUTCONTEXT = "com.redshift3d.redshift4c4d.nodes.co
 PORT_RS_UV_CONTEXT_PROJECTION_PROJECTION = "com.redshift3d.redshift4c4d.nodes.core.uvcontextprojection.proj_type"
 # 000 Passthrough, # 001 UV Channel, # 002 Triplanar
 
+PORT_RS_COLOR_CORRECT_INPUT = "com.redshift3d.redshift4c4d.nodes.core.rscolorcorrection.input"
+PORT_RS_COLOR_CORRECT_OUT = "com.redshift3d.redshift4c4d.nodes.core.rscolorcorrection.outcolor"
+
 PORT_RS_MATH_ABS_INPUT = "com.redshift3d.redshift4c4d.nodes.core.rsmathabs.input"
 PORT_RS_MATH_ABS_OUT = "com.redshift3d.redshift4c4d.nodes.core.rsmathabs.out"
 
@@ -63,6 +68,10 @@ PORT_RS_MATH_ABS_VECTOR_OUT = "com.redshift3d.redshift4c4d.nodes.core.rsmathabsv
 PORT_RS_DISP_TEXMAP = "com.redshift3d.redshift4c4d.nodes.core.displacement.texmap"
 PORT_RS_DISP_OUT = "com.redshift3d.redshift4c4d.nodes.core.displacement.out"
 PORT_RS_OUTPUT_DISPLACEMENT = "com.redshift3d.redshift4c4d.node.output.displacement"
+
+PORT_RS_STD_OUTCOLOR = "com.redshift3d.redshift4c4d.nodes.core.standardmaterial.outcolor"
+
+PORT_RS_OUTPUT_SURFACE = "com.redshift3d.redshift4c4d.node.output.surface"
 
 # Colorspace
 RS_INPUT_COLORSPACE_RAW = "RS_INPUT_COLORSPACE_RAW"
@@ -138,13 +147,13 @@ TEXTURE_CHANNELS = {
         "col", "bc", "alb", "rgb" , "d", "dif"
     ],
     "normal":       [
-        "normal", "norm", "nrm", "nml", "nrml", "n" 
+        "normalgl", "normalopengl", "normal", "norm", "nrm", "nml", "nrml", "nor", "n"
     ],
     "bump":         [
         "bump", "b"
     ],
     "ao":           [
-        "ao", "ambient", "occlusion", "occ", "amb"
+        "ao", "ambient", "occlusion", "occ", "amb", "ambientocclusion"
     ],
     "metalness":    [
         "metallic", "metalness", "metal", "mtl", "met", "m"

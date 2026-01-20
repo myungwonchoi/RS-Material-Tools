@@ -275,7 +275,7 @@ class TextureTransformDialog(c4d.gui.GeDialog):
             "scale_type_vector": False,
             "per_texture": False
         }
-        self.settings_file = os.path.join(os.path.dirname(__file__), "utils", "settings.json")
+        self.settings_file = os.path.join(os.path.dirname(__file__), "mw_utils", "settings.json")
 
     def load_settings(self):
         if not os.path.exists(self.settings_file):
