@@ -551,7 +551,7 @@ class CreatePBRMaterialCommand(c4d.plugins.CommandData):
         return self.dialog.Open(c4d.DLG_TYPE_ASYNC_POPUPEDIT, pluginid=PLUGIN_ID, defaultw=0, defaulth=0)
 
 if __name__ == "__main__":
-    icon_path = os.path.join(os.path.dirname(__file__), "IMfine_PBR_Texture_Setup.tif")
+    icon_path = os.path.join(os.path.dirname(__file__), "Auto_Connect_PBR_Textures.tif")
     bmp = c4d.bitmaps.BaseBitmap()
     if os.path.exists(icon_path):
         bmp.InitWith(icon_path)

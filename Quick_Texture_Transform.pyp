@@ -433,7 +433,7 @@ class QuickTextureTransformCommand(c4d.plugins.CommandData):
 
 
 if __name__ == "__main__":
-    icon_path = os.path.join(os.path.dirname(__file__), "IMfine_Quick_Texture_Transform.tif")
+    icon_path = os.path.join(os.path.dirname(__file__), "Quick_Texture_Transform.tif")
     bmp = c4d.bitmaps.BaseBitmap()
     if os.path.exists(icon_path):
         bmp.InitWith(icon_path)

@@ -4,5 +4,8 @@
     ],
     "python.analysis.extraPaths": [
         "C:\\Program Files\\Maxon Cinema 4D 2026\\resource\\modules\\python\\libs\\python311"
-    ]
+    ],
+    "files.associations": {
+        "*.pyp": "python"
+    }
 }

@@ -598,6 +598,12 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
         doc = c4d.documents.GetActiveDocument()
         doc_path = doc.GetDocumentPath()
         
+        if not doc_path:
+             c4d.gui.MessageDialog("Please save project first.")
+             return
+             
+        tex_folder = os.path.join(doc_path, "tex")
+        
         selected_objs = [obj for obj in self.texture_list if obj.selected]
         if not selected_objs:
              c4d.gui.MessageDialog("No textures selected.")
@@ -616,11 +622,15 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
             # Use Helper
             abs_path = ResolveTexturePath(doc, current_path)
             
-            # Need a valid directory path
+            # Need a valid path to ensure we don't delete the file currently in use
             if not abs_path:
                 continue
                 
-            dir_path = os.path.dirname(abs_path)
+            dir_path = tex_folder
+            
+            if not os.path.exists(dir_path):
+                continue
+
             filename = os.path.basename(abs_path)
             
             # Use Helper
@@ -644,9 +654,10 @@ class ResizeTextureDialog(c4d.gui.GeDialog):
                     # Verify it's not the currently used file
                     if os.path.abspath(full_path).lower() != os.path.abspath(abs_path).lower():
                         try:
-                            os.remove(full_path)
-                            print(f"Deleted unused: {f}")
-                            deleted_files.append(f)
+                            if os.path.exists(full_path):
+                                os.remove(full_path)
+                                print(f"Deleted unused: {f}")
+                                deleted_files.append(f)
                         except Exception as e:
                             print(f"Failed to delete {f}: {e}")
         
@@ -702,7 +713,12 @@ class ResizeTextureCommand(c4d.plugins.CommandData):
         return self.dialog.Restore(PLUGIN_ID, sec_ref)
 
 if __name__ == "__main__":
-    bmp = None
+    icon_path = os.path.join(os.path.dirname(__file__), "Resize_Texture_Resolution.tif")
+    bmp = c4d.bitmaps.BaseBitmap()
+    if os.path.exists(icon_path):
+        bmp.InitWith(icon_path)
+    else:
+        bmp = None
     c4d.plugins.RegisterCommandPlugin(
         id=PLUGIN_ID,
         str="Resize Texture Resolution...",
