@@ -3,7 +3,7 @@ import maxon
 import os
 import sys
 import ctypes
-from ctypes import wintypes
+
 
 # redshift_utils 경로 추가
 current_dir = os.path.dirname(__file__)
@@ -18,84 +18,117 @@ PLUGIN_ID = 1067297
 
 def ask_open_filenames(title="Select Files"):
     """
-    Opens a native Windows file dialog for multi-file selection using ctypes.
-    Returns a list of selected file paths.
+    Opens a native file dialog for multi-file selection.
+    Supports Windows (via ctypes) and macOS (via osascript).
     """
-    # Constants
-    OFN_ALLOWMULTISELECT = 0x00000200
-    OFN_EXPLORER = 0x00080000
-    OFN_FILEMUSTEXIST = 0x00001000
-    
-    # Structure definition
-    class OPENFILENAMEW(ctypes.Structure):
-        _fields_ = [
-            ("lStructSize", wintypes.DWORD),
-            ("hwndOwner", wintypes.HWND),
-            ("hInstance", wintypes.HINSTANCE),
-            ("lpstrFilter", wintypes.LPCWSTR),
-            ("lpstrCustomFilter", wintypes.LPWSTR),
-            ("nMaxCustFilter", wintypes.DWORD),
-            ("nFilterIndex", wintypes.DWORD),
-            ("lpstrFile", wintypes.LPWSTR),
-            ("nMaxFile", wintypes.DWORD),
-            ("lpstrFileTitle", wintypes.LPWSTR),
-            ("nMaxFileTitle", wintypes.DWORD),
-            ("lpstrInitialDir", wintypes.LPCWSTR),
-            ("lpstrTitle", wintypes.LPCWSTR),
-            ("Flags", wintypes.DWORD),
-            ("nFileOffset", wintypes.WORD),
-            ("nFileExtension", wintypes.WORD),
-            ("lpstrDefExt", wintypes.LPCWSTR),
-            ("lCustData", wintypes.LPARAM),
-            ("lpfnHook", wintypes.LPVOID),
-            ("lpTemplateName", wintypes.LPCWSTR),
-            ("pvReserved", wintypes.LPVOID),
-            ("dwReserved", wintypes.DWORD),
-            ("FlagsEx", wintypes.DWORD),
-        ]
-
-    # Buffer for file names (64KB should be enough for many files)
-    max_file_buffer = 65536 
-    file_buffer = ctypes.create_unicode_buffer(max_file_buffer)
-    
-    # Filter: Display Name\0Pattern\0...
-    filter_str = "Image Files\0*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.exr;*.hdr;*.psd;*.tga\0All Files\0*.*\0\0"
-    
-    ofn = OPENFILENAMEW()
-    ofn.lStructSize = ctypes.sizeof(OPENFILENAMEW)
-    ofn.hwndOwner = 0 
-    ofn.lpstrFilter = filter_str
-    ofn.lpstrFile = ctypes.cast(file_buffer, wintypes.LPWSTR)
-    ofn.nMaxFile = max_file_buffer
-    ofn.lpstrTitle = title
-    ofn.Flags = OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST
-    
-    if ctypes.windll.comdlg32.GetOpenFileNameW(ctypes.byref(ofn)):
-        # Parse the result buffer
-        files = []
-        current_str = ""
-        i = 0
-        while i < max_file_buffer:
-            char = file_buffer[i]
-            if char == '\0':
-                if not current_str:
-                    # Double null hit (empty string after a null) -> End of list
-                    break
-                files.append(current_str)
-                current_str = ""
-            else:
-                current_str += char
-            i += 1
-            
-        if not files:
+    if sys.platform == 'win32':
+        try:
+            from ctypes import wintypes
+        except ImportError:
             return []
-            
-        if len(files) == 1:
-            return files # Single file full path
-        else:
-            # Multi-select: First element is directory, rest are filenames
-            directory = files[0]
-            return [os.path.join(directory, f) for f in files[1:]]
+
+        # Constants
+        OFN_ALLOWMULTISELECT = 0x00000200
+        OFN_EXPLORER = 0x00080000
+        OFN_FILEMUSTEXIST = 0x00001000
+        
+        # Structure definition
+        class OPENFILENAMEW(ctypes.Structure):
+            _fields_ = [
+                ("lStructSize", wintypes.DWORD),
+                ("hwndOwner", wintypes.HWND),
+                ("hInstance", wintypes.HINSTANCE),
+                ("lpstrFilter", wintypes.LPCWSTR),
+                ("lpstrCustomFilter", wintypes.LPWSTR),
+                ("nMaxCustFilter", wintypes.DWORD),
+                ("nFilterIndex", wintypes.DWORD),
+                ("lpstrFile", wintypes.LPWSTR),
+                ("nMaxFile", wintypes.DWORD),
+                ("lpstrFileTitle", wintypes.LPWSTR),
+                ("nMaxFileTitle", wintypes.DWORD),
+                ("lpstrInitialDir", wintypes.LPCWSTR),
+                ("lpstrTitle", wintypes.LPCWSTR),
+                ("Flags", wintypes.DWORD),
+                ("nFileOffset", wintypes.WORD),
+                ("nFileExtension", wintypes.WORD),
+                ("lpstrDefExt", wintypes.LPCWSTR),
+                ("lCustData", wintypes.LPARAM),
+                ("lpfnHook", wintypes.LPVOID),
+                ("lpTemplateName", wintypes.LPCWSTR),
+                ("pvReserved", wintypes.LPVOID),
+                ("dwReserved", wintypes.DWORD),
+                ("FlagsEx", wintypes.DWORD),
+            ]
+
+        # Buffer for file names (64KB should be enough for many files)
+        max_file_buffer = 65536 
+        file_buffer = ctypes.create_unicode_buffer(max_file_buffer)
+        
+        # Filter: Display Name\0Pattern\0...
+        filter_str = "Image Files\0*.png;*.jpg;*.jpeg;*.tif;*.tiff;*.exr;*.hdr;*.psd;*.tga\0All Files\0*.*\0\0"
+        
+        ofn = OPENFILENAMEW()
+        ofn.lStructSize = ctypes.sizeof(OPENFILENAMEW)
+        ofn.hwndOwner = 0 
+        ofn.lpstrFilter = filter_str
+        ofn.lpstrFile = ctypes.cast(file_buffer, wintypes.LPWSTR)
+        ofn.nMaxFile = max_file_buffer
+        ofn.lpstrTitle = title
+        ofn.Flags = OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST
+        
+        if ctypes.windll.comdlg32.GetOpenFileNameW(ctypes.byref(ofn)):
+            # Parse the result buffer
+            files = []
+            current_str = ""
+            i = 0
+            while i < max_file_buffer:
+                char = file_buffer[i]
+                if char == '\0':
+                    if not current_str:
+                        # Double null hit (empty string after a null) -> End of list
+                        break
+                    files.append(current_str)
+                    current_str = ""
+                else:
+                    current_str += char
+                i += 1
+                
+            if not files:
+                return []
+                
+            if len(files) == 1:
+                return files # Single file full path
+            else:
+                # Multi-select: First element is directory, rest are filenames
+                directory = files[0]
+                return [os.path.join(directory, f) for f in files[1:]]
+
+    elif sys.platform == 'darwin':
+        import subprocess
+        # AppleScript logic for macOS
+        script = '''
+        try
+            set fileList to choose file with prompt "%s" of type {"png", "jpg", "jpeg", "tif", "tiff", "exr", "hdr", "psd", "tga"} with multiple selections allowed
+            set outString to ""
+            repeat with aFile in fileList
+                set outString to outString & POSIX path of aFile & "\\n"
+            end repeat
+            return outString
+        on error
+            return ""
+        end try
+        ''' % (title)
+        
+        try:
+            # Run AppleScript via osascript
+            result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                # Split lines and clean up
+                paths = result.stdout.strip().split('\\n')
+                return [p.strip() for p in paths if p.strip()]
+        except Exception as e:
+            print(f"macOS file dialog error: {e}")
+            return []
             
     return []
 

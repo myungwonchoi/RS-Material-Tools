@@ -12,8 +12,15 @@ if sub_dir not in sys.path:
     sys.path.append(sub_dir)
 
 # Add dependencies path
-dep_dir = os.path.join(current_dir, "dependencies")
-if dep_dir not in sys.path:
+# Add dependencies path based on OS
+if sys.platform == 'win32':
+    dep_dir = os.path.join(current_dir, "dependencies", "win64")
+elif sys.platform == 'darwin':
+    dep_dir = os.path.join(current_dir, "dependencies", "osx")
+else:
+    dep_dir = os.path.join(current_dir, "dependencies") # Fallback
+
+if os.path.exists(dep_dir) and dep_dir not in sys.path:
     sys.path.append(dep_dir)
 
 # Try to import PIL
